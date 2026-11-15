@@ -1,0 +1,3 @@
+- insert:
+    - id: delegate
+      name: 'dsh-delegate'

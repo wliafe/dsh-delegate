@@ -1,0 +1,39 @@
+{
+  "name": "dsh-delegate",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "命中工作目录的主会话只能把任务派给持久子会话。",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./lib/client.js",
+    "./locale/*.json": "./locale/*.json"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "lib",
+    "policy.js",
+    "cordis.patch.yml",
+    "locale"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web"
+    }
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "*",
+    "@deepseek-ai/dsh-storage": "*",
+    "@deepseek-ai/dsh-storage-domain": "*",
+    "@deepseek-ai/dsh-subagent": "*",
+    "@deepseek-ai/schemastery": "*",
+    "react": "*"
+  },
+  "devDependencies": {
+    "tsdown": "^0.23.7"
+  }
+}

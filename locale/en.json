@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Delegate",
+    "description": "A root session under a listed directory can only hand work to persistent subagents."
+  }
+}
