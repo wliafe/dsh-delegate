@@ -44,6 +44,15 @@ pnpm install
 
 > 直接 `pnpm exec tsdown` 会因为 pnpm 去解析未发布的 `@deepseek-ai/dsh-type-meta` 而报 404，改用 `./node_modules/.bin/tsdown`。
 
+本地调试时，改完代码用一条命令构建并同步进已安装副本（默认 `~/.dsh/profiles/desktop/node_modules/dsh-delegate`，可用 `--dest` 或 `DSH_DELEGATE_INSTALL` 覆盖）：
+
+```sh
+npm run deploy:local      # = build + sync
+```
+
+宿主逻辑（`index.js`）的改动要把插件关一下再开；页面部分（`lib/client.js`）的改动刷新浏览器页面即可。
+
+
 ## 结构
 
 - `index.js` — 宿主侧插件：工具收窄、起名守卫、闲置隐藏、配置路由。

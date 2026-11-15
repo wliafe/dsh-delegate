@@ -16,8 +16,14 @@
     "lib",
     "policy.js",
     "cordis.patch.yml",
-    "locale"
+    "locale",
+    "scripts"
   ],
+  "scripts": {
+    "build": "./node_modules/.bin/tsdown",
+    "sync": "node scripts/sync.mjs",
+    "deploy:local": "npm run build && npm run sync"
+  },
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
