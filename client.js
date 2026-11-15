@@ -19,6 +19,22 @@ const BASE_KEPT_TOOLS = [
   'schedule_view',
 ]
 
+/**
+ * 按工具名头部归类。MCP 工具（含 `__`）按前两段分组（`mcp__notion__notion-fetch` →
+ * 组 `mcp__notion`、短名 `notion-fetch`）；其余按第一个下划线前的段分组；没有下划线的
+ * 整个名字即一组。
+ * @param {string} name 工具全名。
+ * @returns {{ group: string, short: string }}
+ */
+function groupOf(name) {
+  if (name.includes('__')) {
+    const parts = name.split('__')
+    return { group: parts.slice(0, 2).join('__'), short: parts.slice(2).join('__') || name }
+  }
+  if (name.includes('_')) return { group: name.split('_')[0], short: name }
+  return { group: name, short: name }
+}
+
 const styles = {
   section: {
     display: 'flex',
@@ -140,11 +156,54 @@ const styles = {
     border: '0.5px solid var(--dsw-alias-border-l2)',
     borderRadius: 'var(--dsw-radius-md, 8px)',
   },
+  groupHeader: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 8,
+    width: '100%',
+    padding: '9px 12px',
+    background: 'transparent',
+    border: 'none',
+    borderTop: '0.5px solid var(--dsw-alias-border-l2)',
+    cursor: 'pointer',
+    textAlign: 'left',
+    fontFamily: 'inherit',
+  },
+  chevron: {
+    flexShrink: 0,
+    width: 12,
+    fontSize: 11,
+    color: 'var(--dsw-alias-label-tertiary)',
+  },
+  groupTitle: {
+    flex: 1,
+    minWidth: 0,
+    fontSize: 13,
+    lineHeight: '18px',
+    fontWeight: 500,
+    color: 'var(--dsw-alias-label-primary)',
+    fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+  },
+  groupCount: {
+    flexShrink: 0,
+    fontSize: 12,
+    color: 'var(--dsw-alias-label-tertiary)',
+  },
   toolRow: {
     display: 'flex',
     alignItems: 'flex-start',
     gap: 10,
     padding: '8px 12px',
+    borderTop: '0.5px solid var(--dsw-alias-border-l2)',
+  },
+  toolRowMember: {
+    display: 'flex',
+    alignItems: 'flex-start',
+    gap: 10,
+    padding: '8px 12px 8px 32px',
     borderTop: '0.5px solid var(--dsw-alias-border-l2)',
   },
   toolRowMain: {
@@ -353,6 +412,7 @@ function Editor({ value }) {
   const [skip, setSkip] = useState(savedSkip)
   const [extraTools, setExtraTools] = useState(savedKeep)
   const [search, setSearch] = useState('')
+  const [overrides, setOverrides] = useState({})
   const [allTools, setAllTools] = useState({ status: 'loading', list: [], message: '' })
   const [note, setNote] = useState({ text: '', ok: false })
   const [busy, setBusy] = useState(false)
@@ -434,14 +494,49 @@ function Editor({ value }) {
   const baseSet = new Set(BASE_KEPT_TOOLS)
   const extraSet = new Set(extraTools)
   const described = new Map(allTools.list.map(tool => [tool.name, tool.description]))
-  const rows = [
-    ...BASE_KEPT_TOOLS.map(name => ({ name, description: described.get(name) ?? '', fixed: true })),
-    ...allTools.list
-      .filter(tool => !baseSet.has(tool.name))
-      .map(tool => ({ name: tool.name, description: tool.description, fixed: false })),
-  ]
+  // 固定组：7 个基础工具永远排最前、已勾选禁用。
+  const fixedGroup = {
+    key: '__fixed__',
+    title: '固定保留',
+    fixed: true,
+    members: BASE_KEPT_TOOLS.map(name => ({ name, short: name, description: described.get(name) ?? '', fixed: true })),
+  }
+  // 其余按名字前缀分组，组内按短名排序；组间按成员数降序、同数按组名。
+  const byGroup = new Map()
+  for (const tool of allTools.list) {
+    if (baseSet.has(tool.name)) continue
+    const { group, short } = groupOf(tool.name)
+    if (!byGroup.has(group)) byGroup.set(group, [])
+    byGroup.get(group).push({ name: tool.name, short, description: tool.description, fixed: false })
+  }
+  const prefixGroups = [...byGroup.entries()]
+    .map(([title, members]) => ({
+      key: title,
+      title,
+      fixed: false,
+      members: members.sort((a, b) => a.short.localeCompare(b.short) || a.name.localeCompare(b.name)),
+    }))
+    .sort((a, b) => b.members.length - a.members.length || a.title.localeCompare(b.title))
+  const groups = [fixedGroup, ...prefixGroups]
+
   const query = search.trim().toLowerCase()
-  const visibleRows = query.length === 0 ? rows : rows.filter(row => row.name.toLowerCase().includes(query))
+  const shown = groups
+    .map(group => {
+      if (query.length === 0) return { group, members: group.members }
+      const members = group.members.filter(member => member.name.toLowerCase().includes(query) || member.short.toLowerCase().includes(query))
+      return { group, members }
+    })
+    .filter(item => item.members.length > 0)
+
+  const isOpen = (group, members) => {
+    const defaultOpen = group.fixed || members.some(member => member.fixed || extraSet.has(member.name))
+    if (query.length > 0) return true
+    return group.key in overrides ? overrides[group.key] : defaultOpen
+  }
+  const toggleGroup = (group, defaultOpen) => {
+    if (query.length > 0) return
+    setOverrides(prev => ({ ...prev, [group.key]: !(group.key in prev ? prev[group.key] : defaultOpen) }))
+  }
 
   return h('div', { style: styles.section },
     h('div', { style: styles.header },
@@ -534,6 +629,7 @@ function Editor({ value }) {
           h('span', { style: styles.label }, '额外保留的工具'),
           h('p', { style: styles.description }, '固定保留的 7 个工具已勾选并锁定；下面勾选其它工具即可加入 keepTools，取消即移除。'),
         ),
+        h('p', { style: styles.description }, `共 ${allTools.list.length} 个工具，${groups.length} 个组，已额外保留 ${extraTools.length} 个。`),
         h('input', {
           type: 'text',
           value: search,
@@ -546,28 +642,46 @@ function Editor({ value }) {
           ? h('p', { style: { ...styles.emptyHint, color: 'var(--dsw-alias-state-error-primary)' } }, `读不到工具清单：${allTools.message}`)
           : allTools.status === 'loading'
             ? h('p', { style: styles.emptyHint }, '工具清单加载中…')
-            : visibleRows.length === 0
+            : shown.length === 0
               ? h('p', { style: styles.emptyHint }, '没有匹配的工具。')
               : h('div', { style: styles.toolList },
-                  ...visibleRows.map((row, index) =>
-                    h('div', { key: row.name, style: index === 0 ? { ...styles.toolRow, borderTop: 'none' } : styles.toolRow },
-                      h('input', {
-                        type: 'checkbox',
-                        checked: row.fixed || extraSet.has(row.name),
-                        disabled: busy || row.fixed,
-                        onChange: event => toggleTool(row.name, event.target.checked),
-                        'aria-label': row.name,
-                        style: styles.checkbox,
-                      }),
-                      h('div', { style: styles.toolRowMain },
-                        h('span', { style: styles.toolName, title: row.name }, row.name),
-                        row.description ? h('p', { style: styles.toolDesc, title: row.description }, row.description) : null,
+                  ...shown.map(({ group, members }, groupIndex) => {
+                    const open = isOpen(group, members)
+                    const defaultOpen = group.fixed || members.some(member => member.fixed || extraSet.has(member.name))
+                    return h('div', { key: group.key, style: { display: 'flex', flexDirection: 'column' } },
+                      h('button', {
+                        type: 'button',
+                        onClick: () => toggleGroup(group, defaultOpen),
+                        style: groupIndex === 0 ? { ...styles.groupHeader, borderTop: 'none' } : styles.groupHeader,
+                      },
+                        h('span', { style: styles.chevron }, open ? '▾' : '▸'),
+                        h('span', { style: styles.groupTitle, title: group.title }, group.title),
+                        h('span', { style: styles.groupCount }, query.length > 0 ? `匹配 ${members.length} 个` : `${members.length} 个`),
                       ),
-                      row.fixed ? h('span', { style: styles.fixedTag }, '固定保留') : null,
-                    ),
-                  ),
+                      open
+                        ? h('div', { style: { display: 'flex', flexDirection: 'column' } },
+                            ...members.map(member =>
+                              h('div', { key: member.name, style: styles.toolRowMember },
+                                h('input', {
+                                  type: 'checkbox',
+                                  checked: member.fixed || extraSet.has(member.name),
+                                  disabled: busy || member.fixed,
+                                  onChange: event => toggleTool(member.name, event.target.checked),
+                                  'aria-label': member.name,
+                                  style: styles.checkbox,
+                                }),
+                                h('div', { style: styles.toolRowMain },
+                                  h('span', { style: styles.toolName, title: member.name }, member.short),
+                                  member.description ? h('p', { style: styles.toolDesc, title: member.description }, member.description) : null,
+                                ),
+                                member.fixed ? h('span', { style: styles.fixedTag }, '固定保留') : null,
+                              ),
+                            ),
+                          )
+                        : null,
+                    )
+                  }),
                 ),
-        h('p', { style: styles.description }, `已额外保留 ${extraTools.length} 个工具。`),
       ),
     ),
     h('div', { style: styles.footer },
