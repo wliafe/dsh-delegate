@@ -12,13 +12,10 @@ DeepSeek Harness（DSH）的一个插件：命中指定工作目录的**根会�
 ## 安装
 
 ```sh
-# 本地路径（本机当前用法）
-dsh plugin --profile <profile> add file:/abs/path/to/dsh-delegate
-# 从 GitHub 直装
 dsh plugin --profile <profile> add github:wliafe/dsh-delegate
 ```
 
-本机用的是 `file:`（`/Users/wliafe/Desktop/project/dsh-delegate`）；改源码后 `node scripts/sync.mjs` 同步，宿主改动关/开插件，页面改动刷新浏览器。
+在源码仓库里开发时，改完用 `node scripts/sync.mjs` 同步到 profile；宿主改动关/开插件，页面改动刷新浏览器。
 
 ## 配置
 
