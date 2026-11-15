@@ -27,8 +27,8 @@ dsh plugin --profile <profile> add github:wliafe/dsh-delegate
 | `keepTools` | `string[]` | `[]` | 在固定 7 个之外，额外要放行的工具名（如 IM 的 `dsh_im_return_file`）。 |
 
 - 配置存在 `<profile>/cordis.patch.yml` 里 `include:delegate` 条目的 `config` 下。
-- 设置界面在 **设置 → 派活**（设置弹窗左侧导航里的一节）；「额外保留的工具」一节对应 `keepTools`。
-- 也可以直接 `POST /delegate/config`，JSON 就是上面四个字段。
+- 设置界面在 **设置 → 派活**（设置弹窗左侧导航里的一节）；「额外保留的工具」一节对应 `keepTools`，会列出当前可用工具用多选管理（固定 7 个已勾选且锁定，其余勾选即加入、取消即移除，可按名字搜索）。
+- 也可以直接 `POST /delegate/config`，JSON 就是上面四个字段；工具清单可用 `GET /delegate/tools` 查看。
 
 ## 行为细节
 

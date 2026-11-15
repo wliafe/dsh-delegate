@@ -49,6 +49,12 @@ export async function apply(ctx, config) {
     handler: (req, res) => handleConfig(ctx, req, res),
   }), 'delegate: config route')
 
+  ctx.effect(() => ctx.webServer.register({
+    kind: 'exact',
+    path: '/delegate/tools',
+    handler: (req, res) => handleTools(ctx, req, res),
+  }), 'delegate: tools route')
+
   const domain = await ctx.storageDomain.open(ACTIVITY)
   ctx.effect(() => () => { void domain.close() }, 'delegate: activity domain')
   const table = domain.table('activity')
@@ -162,6 +168,34 @@ export async function apply(ctx, config) {
 }
 
 const ROUTE = '/delegate/config'
+
+/**
+ * 设置页用来展示全部可勾选工具：GET 返回当前全局可见的工具清单（名字 + 描述）。
+ * 来源是 `ctx.tools.definitions()`（不传 scope = 全局视图），只含全局注册的工具；
+ * 某个 agent 作用域私有的工具不会出现在这里（这是它的局限，通常也不影响配置）。
+ * @param {import('@deepseek-ai/cordis').Context} ctx 插件上下文。
+ * @param {import('node:http').IncomingMessage} req 请求。
+ * @param {import('node:http').ServerResponse} res 响应。
+ */
+function handleTools(ctx, req, res) {
+  if (req.method !== 'GET') {
+    res.writeHead(405, { allow: 'GET', 'cache-control': 'no-store' }).end()
+    return
+  }
+  let tools
+  try {
+    tools = [...ctx.tools.definitions()]
+      .map(definition => ({
+        name: definition.name,
+        description: typeof definition.description === 'string' ? definition.description : '',
+      }))
+      .sort((left, right) => left.name.localeCompare(right.name))
+  } catch (error) {
+    sendJson(res, 500, { error: error instanceof Error ? error.message : '读不到工具清单。' })
+    return
+  }
+  sendJson(res, 200, { tools })
+}
 
 /**
  * 设置页读写配置的入口。GET 返回生效值，POST 写回平台配置并让插件重读。

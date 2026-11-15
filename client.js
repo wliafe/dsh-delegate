@@ -6,6 +6,18 @@ export const inject = ['slots']
 
 const SECTION = 'delegate'
 const PATH = 'delegate/config'
+const TOOLS_PATH = 'delegate/tools'
+
+/** 固定保留的 7 个工具：始终放行、在列表里勾选且禁用，仅用于展示全貌。 */
+const BASE_KEPT_TOOLS = [
+  'list_agents',
+  'send_message',
+  'subagent',
+  'schedule_create',
+  'schedule_edit',
+  'schedule_list',
+  'schedule_view',
+]
 
 const styles = {
   section: {
@@ -121,6 +133,63 @@ const styles = {
     overflow: 'hidden',
     textOverflow: 'ellipsis',
     whiteSpace: 'nowrap',
+  },
+  toolList: {
+    maxHeight: 280,
+    overflowY: 'auto',
+    border: '0.5px solid var(--dsw-alias-border-l2)',
+    borderRadius: 'var(--dsw-radius-md, 8px)',
+  },
+  toolRow: {
+    display: 'flex',
+    alignItems: 'flex-start',
+    gap: 10,
+    padding: '8px 12px',
+    borderTop: '0.5px solid var(--dsw-alias-border-l2)',
+  },
+  toolRowMain: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 2,
+    minWidth: 0,
+    flex: 1,
+  },
+  toolName: {
+    fontSize: 13,
+    lineHeight: '18px',
+    fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
+    color: 'var(--dsw-alias-label-primary)',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+  },
+  toolDesc: {
+    margin: 0,
+    fontSize: 12,
+    lineHeight: '16px',
+    color: 'var(--dsw-alias-label-tertiary)',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+  },
+  fixedTag: {
+    flexShrink: 0,
+    alignSelf: 'center',
+    padding: '0 6px',
+    height: 18,
+    lineHeight: '18px',
+    fontSize: 11,
+    color: 'var(--dsw-alias-label-tertiary)',
+    background: 'var(--dsw-alias-border-l1, rgba(0,0,0,0.05))',
+    borderRadius: 6,
+  },
+  checkbox: {
+    marginTop: 2,
+    flexShrink: 0,
+    width: 15,
+    height: 15,
+    accentColor: 'var(--dsw-alias-state-business-primary)',
+    cursor: 'pointer',
   },
   daysWrap: {
     display: 'flex',
@@ -283,9 +352,32 @@ function Editor({ value }) {
   const [days, setDays] = useState(String(savedDays))
   const [skip, setSkip] = useState(savedSkip)
   const [extraTools, setExtraTools] = useState(savedKeep)
-  const [toolDraft, setToolDraft] = useState('')
+  const [search, setSearch] = useState('')
+  const [allTools, setAllTools] = useState({ status: 'loading', list: [], message: '' })
   const [note, setNote] = useState({ text: '', ok: false })
   const [busy, setBusy] = useState(false)
+
+  useEffect(() => {
+    let gone = false
+    fetch(TOOLS_PATH, { headers: { accept: 'application/json' } })
+      .then(async (response) => {
+        if (!response.ok) throw new Error(`HTTP ${response.status}`)
+        return response.json()
+      })
+      .then((body) => {
+        if (gone) return
+        const list = Array.isArray(body.tools)
+          ? body.tools
+              .filter(tool => tool && typeof tool.name === 'string')
+              .map(tool => ({ name: tool.name, description: typeof tool.description === 'string' ? tool.description : '' }))
+          : []
+        setAllTools({ status: 'ready', list, message: '' })
+      })
+      .catch((error) => {
+        if (!gone) setAllTools({ status: 'error', list: [], message: error instanceof Error ? error.message : '读取失败。' })
+      })
+    return () => { gone = true }
+  }, [])
 
   function updateDir(index, nextValue) {
     setDirs(prev => prev.map((item, i) => (i === index ? nextValue : item)))
@@ -302,16 +394,10 @@ function Editor({ value }) {
     if (note.text) setNote({ text: '', ok: false })
   }
 
-  function addTool() {
-    const name = toolDraft.trim()
-    if (name.length === 0) return
-    setExtraTools(prev => (prev.includes(name) ? prev : [...prev, name]))
-    setToolDraft('')
-    if (note.text) setNote({ text: '', ok: false })
-  }
-
-  function removeTool(index) {
-    setExtraTools(prev => prev.filter((_, i) => i !== index))
+  function toggleTool(name, checked) {
+    setExtraTools(prev => (checked
+      ? (prev.includes(name) ? prev : [...prev, name])
+      : prev.filter(item => item !== name)))
     if (note.text) setNote({ text: '', ok: false })
   }
 
@@ -344,6 +430,18 @@ function Editor({ value }) {
       setBusy(false)
     }
   }
+
+  const baseSet = new Set(BASE_KEPT_TOOLS)
+  const extraSet = new Set(extraTools)
+  const described = new Map(allTools.list.map(tool => [tool.name, tool.description]))
+  const rows = [
+    ...BASE_KEPT_TOOLS.map(name => ({ name, description: described.get(name) ?? '', fixed: true })),
+    ...allTools.list
+      .filter(tool => !baseSet.has(tool.name))
+      .map(tool => ({ name: tool.name, description: tool.description, fixed: false })),
+  ]
+  const query = search.trim().toLowerCase()
+  const visibleRows = query.length === 0 ? rows : rows.filter(row => row.name.toLowerCase().includes(query))
 
   return h('div', { style: styles.section },
     h('div', { style: styles.header },
@@ -434,48 +532,42 @@ function Editor({ value }) {
       h('div', { style: styles.rowTop },
         h('div', { style: styles.rowText },
           h('span', { style: styles.label }, '额外保留的工具'),
-          h('p', { style: styles.description }, '固定保留 list_agents、send_message、subagent 和 schedule_create / edit / list / view；这里追加的工具也会对命中会话放行，例如 IM 的发文件、群历史、群文件。'),
+          h('p', { style: styles.description }, '固定保留的 7 个工具已勾选并锁定；下面勾选其它工具即可加入 keepTools，取消即移除。'),
         ),
-        extraTools.length === 0
-          ? h('p', { style: styles.emptyHint }, '尚未追加。固定保留：list_agents、send_message、subagent、schedule_* 四项。')
-          : h('div', { style: styles.dirList },
-              ...extraTools.map((name, index) =>
-                h('div', { key: `${name}:${index}`, style: styles.dirRow },
-                  h('span', { style: styles.toolChip, title: name }, name),
-                  h('button', {
-                    type: 'button',
-                    disabled: busy,
-                    onClick: () => removeTool(index),
-                    style: { ...styles.ghostBtn, opacity: busy ? 0.5 : 1 },
-                  }, '移除'),
+        h('input', {
+          type: 'text',
+          value: search,
+          placeholder: '按名字搜索工具',
+          disabled: busy,
+          onChange: event => setSearch(event.target.value),
+          style: styles.input,
+        }),
+        allTools.status === 'error'
+          ? h('p', { style: { ...styles.emptyHint, color: 'var(--dsw-alias-state-error-primary)' } }, `读不到工具清单：${allTools.message}`)
+          : allTools.status === 'loading'
+            ? h('p', { style: styles.emptyHint }, '工具清单加载中…')
+            : visibleRows.length === 0
+              ? h('p', { style: styles.emptyHint }, '没有匹配的工具。')
+              : h('div', { style: styles.toolList },
+                  ...visibleRows.map((row, index) =>
+                    h('div', { key: row.name, style: index === 0 ? { ...styles.toolRow, borderTop: 'none' } : styles.toolRow },
+                      h('input', {
+                        type: 'checkbox',
+                        checked: row.fixed || extraSet.has(row.name),
+                        disabled: busy || row.fixed,
+                        onChange: event => toggleTool(row.name, event.target.checked),
+                        'aria-label': row.name,
+                        style: styles.checkbox,
+                      }),
+                      h('div', { style: styles.toolRowMain },
+                        h('span', { style: styles.toolName, title: row.name }, row.name),
+                        row.description ? h('p', { style: styles.toolDesc, title: row.description }, row.description) : null,
+                      ),
+                      row.fixed ? h('span', { style: styles.fixedTag }, '固定保留') : null,
+                    ),
+                  ),
                 ),
-              ),
-            ),
-        h('div', { style: styles.dirRow },
-          h('input', {
-            type: 'text',
-            value: toolDraft,
-            placeholder: '工具名，例如 dsh_im_return_file',
-            disabled: busy,
-            onChange: event => {
-              setToolDraft(event.target.value)
-              if (note.text) setNote({ text: '', ok: false })
-            },
-            onKeyDown: event => {
-              if (event.key === 'Enter') {
-                event.preventDefault()
-                addTool()
-              }
-            },
-            style: styles.input,
-          }),
-          h('button', {
-            type: 'button',
-            disabled: busy || toolDraft.trim().length === 0,
-            onClick: addTool,
-            style: { ...styles.addBtn, alignSelf: 'auto', opacity: busy || toolDraft.trim().length === 0 ? 0.5 : 1 },
-          }, '添加'),
-        ),
+        h('p', { style: styles.description }, `已额外保留 ${extraTools.length} 个工具。`),
       ),
     ),
     h('div', { style: styles.footer },
