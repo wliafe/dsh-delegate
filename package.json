@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "description": "命中工作目录的主会话只能把任务派给持久子会话。",
+  "license": "MIT",
   "exports": {
     ".": "./index.js",
     "./client": "./lib/client.js",
