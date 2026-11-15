@@ -1,6 +1,6 @@
 /** 设置侧边栏里的一节：工作目录和闲置天数。数据走宿主端自己的路由，不走平台配置表。 */
 
-import { createElement as h, useEffect, useState } from 'react'
+import { createElement as h, useEffect, useRef, useState } from 'react'
 
 export const inject = ['slots']
 
@@ -86,7 +86,7 @@ const styles = {
     borderTop: '0.5px solid var(--dsw-alias-border-l2)',
     display: 'flex',
     flexDirection: 'column',
-    gap: 12,
+    gap: 8,
   },
   rowText: {
     display: 'flex',
@@ -105,6 +105,56 @@ const styles = {
     fontSize: 12,
     lineHeight: '18px',
     color: 'var(--dsw-alias-label-secondary)',
+  },
+  summary: {
+    margin: 0,
+    fontSize: 11,
+    lineHeight: '16px',
+    color: 'var(--dsw-alias-label-secondary)',
+  },
+  searchWrap: {
+    position: 'relative',
+    display: 'flex',
+    alignItems: 'center',
+  },
+  searchIcon: {
+    position: 'absolute',
+    left: 10,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    color: 'var(--dsw-alias-label-tertiary)',
+    pointerEvents: 'none',
+  },
+  searchInput: {
+    flex: 1,
+    minWidth: 0,
+    height: 32,
+    padding: '0 10px 0 32px',
+    fontSize: 13,
+    lineHeight: '20px',
+    color: 'var(--dsw-alias-label-primary)',
+    background: 'var(--dsw-alias-bg-layer-1)',
+    border: '0.5px solid var(--dsw-alias-border-l3)',
+    borderRadius: 'var(--dsw-radius-md, 8px)',
+    outline: 'none',
+    fontFamily: 'inherit',
+    boxSizing: 'border-box',
+  },
+  searchClear: {
+    position: 'absolute',
+    right: 6,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 22,
+    height: 22,
+    padding: 0,
+    border: 'none',
+    background: 'transparent',
+    color: 'var(--dsw-alias-label-tertiary)',
+    cursor: 'pointer',
+    borderRadius: 'var(--dsw-radius-md, 8px)',
   },
   dirList: {
     display: 'flex',
@@ -412,6 +462,8 @@ function Editor({ value }) {
   const [skip, setSkip] = useState(savedSkip)
   const [extraTools, setExtraTools] = useState(savedKeep)
   const [search, setSearch] = useState('')
+  const [searchFocus, setSearchFocus] = useState(false)
+  const searchInputRef = useRef(null)
   const [overrides, setOverrides] = useState({})
   const [allTools, setAllTools] = useState({ status: 'loading', list: [], message: '' })
   const [note, setNote] = useState({ text: '', ok: false })
@@ -539,6 +591,7 @@ function Editor({ value }) {
   }
 
   return h('div', { style: styles.section },
+    h('style', null, '.dsh-delegate-search-input::placeholder{color:var(--dsw-alias-label-tertiary);opacity:1;}'),
     h('div', { style: styles.header },
       h('h2', { style: styles.title }, '派活'),
       h('p', { style: styles.subtitle }, '在命中的工作目录中，仅保留派活相关工具并自动清理闲置子会话。'),
@@ -629,15 +682,45 @@ function Editor({ value }) {
           h('span', { style: styles.label }, '额外保留的工具'),
           h('p', { style: styles.description }, '固定保留的 7 个工具已勾选并锁定；下面勾选其它工具即可加入 keepTools，取消即移除。'),
         ),
-        h('p', { style: styles.description }, `共 ${allTools.list.length} 个工具，${groups.length} 个组，已额外保留 ${extraTools.length} 个。`),
-        h('input', {
-          type: 'text',
-          value: search,
-          placeholder: '按名字搜索工具',
-          disabled: busy,
-          onChange: event => setSearch(event.target.value),
-          style: styles.input,
-        }),
+        h('p', { style: styles.summary }, `共 ${allTools.list.length} 个工具，${groups.length} 个组，已额外保留 ${extraTools.length} 个。`),
+        h('div', { style: styles.searchWrap },
+          h('span', { style: styles.searchIcon, 'aria-hidden': 'true' },
+            h('svg', { width: 15, height: 15, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' },
+              h('circle', { cx: 11, cy: 11, r: 7 }),
+              h('line', { x1: 21, y1: 21, x2: 16.65, y2: 16.65 }),
+            ),
+          ),
+          h('input', {
+            type: 'text',
+            className: 'dsh-delegate-search-input',
+            value: search,
+            placeholder: '按名字搜索工具',
+            disabled: busy,
+            ref: searchInputRef,
+            onChange: event => setSearch(event.target.value),
+            onFocus: () => setSearchFocus(true),
+            onBlur: () => setSearchFocus(false),
+            style: {
+              ...styles.searchInput,
+              borderColor: searchFocus ? 'var(--dsw-alias-state-business-primary)' : 'var(--dsw-alias-border-l3)',
+              paddingRight: search.length > 0 ? 32 : 10,
+            },
+          }),
+          search.length > 0
+            ? h('button', {
+                type: 'button',
+                'aria-label': '清除搜索',
+                onClick: () => {
+                  setSearch('')
+                  if (searchInputRef.current && typeof searchInputRef.current.focus === 'function') searchInputRef.current.focus()
+                },
+                style: styles.searchClear,
+              }, h('svg', { width: 14, height: 14, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 2, strokeLinecap: 'round' },
+                h('line', { x1: 6, y1: 6, x2: 18, y2: 18 }),
+                h('line', { x1: 18, y1: 6, x2: 6, y2: 18 }),
+              ))
+            : null,
+        ),
         allTools.status === 'error'
           ? h('p', { style: { ...styles.emptyHint, color: 'var(--dsw-alias-state-error-primary)' } }, `读不到工具清单：${allTools.message}`)
           : allTools.status === 'loading'
@@ -671,7 +754,7 @@ function Editor({ value }) {
                                   style: styles.checkbox,
                                 }),
                                 h('div', { style: styles.toolRowMain },
-                                  h('span', { style: styles.toolName, title: member.name }, member.short),
+                                  h('span', { style: styles.toolName, title: member.name }, member.display ?? member.short),
                                   member.description ? h('p', { style: styles.toolDesc, title: member.description }, member.description) : null,
                                 ),
                                 member.fixed ? h('span', { style: styles.fixedTag }, '固定保留') : null,
