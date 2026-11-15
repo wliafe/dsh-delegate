@@ -4,6 +4,7 @@
  */
 
 import z from '@deepseek-ai/schemastery'
+import { z as zod } from 'zod'
 import { directoryMatches, expiredNames, KEPT_TOOLS, rejectName } from './policy.js'
 
 export const name = 'delegate'
@@ -19,7 +20,7 @@ const ACTIVITY = {
   name: 'delegate',
   version: 1,
   tables: {
-    activity: { valueSchema: z.object({ at: z.number() }) },
+    activity: { valueSchema: zod.object({ at: zod.number() }) },
   },
 }
 
@@ -29,6 +30,11 @@ const RULE = [
   'list_agents 里看不到的子会话不要再找。定时任务只能在这个会话里创建，目标用 this_session，投进来之后再派给子会话。',
   '派完就停，等结果回来再转述。不要说明派给了谁。',
 ].join('')
+
+// 内置 section 的最大 order 是 DEPLOYMENT_PERSONA_SUFFIX = 10200（见
+// @deepseek-ai/dsh-system-prompt 的 SECTION_ORDERS），取 10200 + 100 = 10300，
+// 让派活规则排在所有内置说明之后，且不与任何内置 section 冲突。
+const SECTION_ORDER = 10300
 
 /**
  * @param {import('@deepseek-ai/cordis').Context} ctx 插件上下文。
@@ -46,21 +52,45 @@ export async function apply(ctx, config) {
   const table = domain.table('activity')
   const disposers = new Map()
 
-  ctx.on('agent/created', ({ agent }) => {
+  const attach = agent => {
+    if (disposers.has(agent.id)) return
     if (!appliesTo(agent, config.directories)) return
     const agentCtx = agent.ctx
-    const dispose = agentCtx.effect(() => {
-      const lifts = maskExcept(agentCtx, agent)
-      const stopGuard = agentCtx.tools.guard(exec => guardSpawn(exec))
-      const stopSection = agentCtx.systemPrompt.section({ name: 'delegate', text: RULE })
-      return () => {
-        for (const lift of lifts) lift()
-        stopGuard()
-        stopSection()
-      }
-    })
-    disposers.set(agent.id, dispose)
-  })
+    try {
+      const dispose = agentCtx.effect(() => {
+        // 先做可能失败的事（注册 section、guard），最后才 maskExcept 动工具；
+        // 中途任一步抛错，就把已经注册的 section/guard/lifts 全部撤销，
+        // 避免工具被 restrict 后无法恢复，把 agent 永久锁死。
+        const stopSection = agentCtx.systemPrompt.section({ name: 'delegate', text: RULE, order: SECTION_ORDER })
+        let stopGuard
+        let lifts = []
+        try {
+          stopGuard = agentCtx.tools.guard(exec => guardSpawn(exec))
+          lifts = maskExcept(agentCtx, agent)
+        } catch (error) {
+          for (const lift of lifts) lift()
+          stopGuard?.()
+          stopSection()
+          throw error
+        }
+        return () => {
+          for (const lift of lifts) lift()
+          stopGuard?.()
+          stopSection()
+        }
+      }, 'delegate: attach')
+      disposers.set(agent.id, dispose)
+    } catch (error) {
+      // 接管失败就当没接管：不留下半套状态，也不影响其它会话。
+      disposers.delete(agent.id)
+      ctx.logger.warn(`delegate: 接管会话 ${agent.id} 失败：${error instanceof Error ? error.message : String(error)}`)
+    }
+  }
+
+  // 插件加载时已经在跑的会话也一并接管，不必等它们重开。
+  for (const agent of ctx.agents.list()) attach(agent)
+
+  ctx.on('agent/created', ({ agent }) => attach(agent))
 
   ctx.on('agent/disposed', ({ agent }) => {
     disposers.get(agent.id)?.()
