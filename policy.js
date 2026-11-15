@@ -1,6 +1,6 @@
 /** 命中判断与名字规则。不依赖主机，便于单独验证。 */
 
-/** 主会话保留的工具。前三个派活，后四个只有主会话能用。 */
+/** 主会话保留的工具：派活 3 个、定时 4 个、IM 3 个。 */
 export const KEPT_TOOLS = [
   'list_agents',
   'send_message',
@@ -9,6 +9,9 @@ export const KEPT_TOOLS = [
   'schedule_edit',
   'schedule_list',
   'schedule_view',
+  'dsh_im_return_file',
+  'dsh_im_group_history',
+  'dsh_im_group_file',
 ]
 
 const NAME_RE = /^[a-z][a-z0-9-]{0,31}$/

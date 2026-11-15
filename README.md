@@ -5,7 +5,7 @@ DeepSeek Harness（DSH）的一个插件：命中指定工作目录的**根会�
 ## 它做什么
 
 - 给该会话注入一段系统提示，要求它只派活、把执行交给子会话。
-- 只保留这些工具：`list_agents`、`send_message`、`subagent`、`schedule_create`、`schedule_edit`、`schedule_list`、`schedule_view`。其它工具对该会话不可用。
+- 只保留这些工具：派活 `list_agents`、`send_message`、`subagent`；定时 `schedule_create`、`schedule_edit`、`schedule_list`、`schedule_view`；IM `dsh_im_return_file`、`dsh_im_group_history`、`dsh_im_group_file`。其它工具对该会话不可用。
 - 只作用于根会话，且会话工作目录等于配置目录之一、或在其子目录下（`/data` 不命中 `/data-backup`）。
 - 子会话不受此限制，照常使用全部工具。
 
