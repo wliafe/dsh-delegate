@@ -55,6 +55,12 @@ export async function apply(ctx, config) {
     handler: (req, res) => handleTools(ctx, req, res),
   }), 'delegate: tools route')
 
+  ctx.effect(() => ctx.webServer.register({
+    kind: 'exact',
+    path: '/delegate/tools/events',
+    handler: (req, res) => handleToolEvents(ctx, req, res),
+  }), 'delegate: tools events route')
+
   const domain = await ctx.storageDomain.open(ACTIVITY)
   ctx.effect(() => () => { void domain.close() }, 'delegate: activity domain')
   const table = domain.table('activity')
@@ -195,6 +201,65 @@ function handleTools(ctx, req, res) {
     return
   }
   sendJson(res, 200, { tools })
+}
+
+/**
+ * 工具变更推送：把宿主 `tools/change`（工具注册/注销、作用域限制变化时由
+ * `ToolsService` 发出）通过 SSE 转给设置页，客户端收到后静默重取
+ * `GET /delegate/tools`。连接断开就由客户端退化为打开/刷新/聚焦时拉取。
+ * @param {import('@deepseek-ai/cordis').Context} ctx 插件上下文。
+ * @param {import('node:http').IncomingMessage} req 请求。
+ * @param {import('node:http').ServerResponse} res 响应。
+ */
+function handleToolEvents(ctx, req, res) {
+  if (req.method !== 'GET') {
+    res.writeHead(405, { allow: 'GET', 'cache-control': 'no-store' }).end()
+    return
+  }
+  res.writeHead(200, {
+    'content-type': 'text/event-stream; charset=utf-8',
+    'cache-control': 'no-store',
+    connection: 'keep-alive',
+    'x-accel-buffering': 'no',
+  })
+  try {
+    res.write(': connected\n\n')
+  } catch {
+    res.end()
+    return
+  }
+  let closed = false
+  const off = ctx.on('tools/change', () => {
+    if (closed) return
+    try {
+      res.write('event: tools/change\ndata: {}\n\n')
+    } catch {
+      cleanup()
+    }
+  })
+  const timer = setInterval(() => {
+    if (closed) return
+    try {
+      res.write(': ping\n\n')
+    } catch {
+      cleanup()
+    }
+  }, 25000)
+  if (typeof timer.unref === 'function') timer.unref()
+  function cleanup() {
+    if (closed) return
+    closed = true
+    clearInterval(timer)
+    off()
+    try {
+      res.end()
+    } catch {
+      // 响应可能已被对端关闭，忽略。
+    }
+  }
+  req.on('close', cleanup)
+  req.on('error', cleanup)
+  res.on('error', cleanup)
 }
 
 /**

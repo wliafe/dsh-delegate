@@ -7,6 +7,8 @@ export const inject = ['slots']
 const SECTION = 'delegate'
 const PATH = 'delegate/config'
 const TOOLS_PATH = 'delegate/tools'
+const TOOLS_EVENTS_PATH = 'delegate/tools/events'
+const TOOLS_STALE_MS = 30000
 
 /** 固定保留的 7 个工具：始终放行、在列表里勾选且禁用，仅用于展示全貌。 */
 const BASE_KEPT_TOOLS = [
@@ -33,6 +35,13 @@ function groupOf(name) {
   }
   if (name.includes('_')) return { group: name.split('_')[0], short: name }
   return { group: name, short: name }
+}
+
+/** 把时间戳格式成 HH:MM:SS，用于「上次刷新」提示。 */
+function formatClock(ms) {
+  const date = new Date(ms)
+  const pad = value => String(value).padStart(2, '0')
+  return `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
 }
 
 const styles = {
@@ -111,6 +120,35 @@ const styles = {
     fontSize: 11,
     lineHeight: '16px',
     color: 'var(--dsw-alias-label-secondary)',
+  },
+  toolsMeta: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  toolsMetaRight: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 8,
+    flexShrink: 0,
+  },
+  refreshTime: {
+    fontSize: 11,
+    lineHeight: '16px',
+    color: 'var(--dsw-alias-label-tertiary)',
+    whiteSpace: 'nowrap',
+  },
+  refreshBtn: {
+    height: 26,
+    padding: '0 12px',
+    fontSize: 12,
+    lineHeight: '18px',
+    border: '0.5px solid var(--dsw-alias-border-l3)',
+    borderRadius: 'var(--dsw-radius-md)',
+    background: 'transparent',
+    color: 'var(--dsw-alias-label-primary)',
+    cursor: 'pointer',
   },
   searchWrap: {
     position: 'relative',
@@ -465,30 +503,72 @@ function Editor({ value }) {
   const [searchFocus, setSearchFocus] = useState(false)
   const searchInputRef = useRef(null)
   const [overrides, setOverrides] = useState({})
-  const [allTools, setAllTools] = useState({ status: 'loading', list: [], message: '' })
+  const [allTools, setAllTools] = useState({ status: 'loading', list: [] })
+  const [toolsError, setToolsError] = useState('')
+  const [lastLoadedAt, setLastLoadedAt] = useState(0)
+  const [refreshing, setRefreshing] = useState(false)
+  const loadSeq = useRef(0)
+  const lastLoadedRef = useRef(0)
   const [note, setNote] = useState({ text: '', ok: false })
   const [busy, setBusy] = useState(false)
 
+  /**
+   * 拉取工具清单。宿主没有面向浏览器的事件订阅通道，这里通过 `/delegate/tools/events`
+   * 的 SSE 接收 `tools/change`；拿不到推送时由「打开 / 手动刷新 / 窗口聚焦」三条时机兜底。
+   * 失败时保留上一次的列表，只额外显示一行错误提示，不清空。
+   * @param {{ silent?: boolean }} [options]
+   */
+  async function loadTools(options = {}) {
+    const seq = ++loadSeq.current
+    if (!options.silent) setRefreshing(true)
+    try {
+      const response = await fetch(TOOLS_PATH, { headers: { accept: 'application/json' } })
+      if (!response.ok) throw new Error(`HTTP ${response.status}`)
+      const body = await response.json()
+      if (seq !== loadSeq.current) return
+      const list = Array.isArray(body.tools)
+        ? body.tools
+            .filter(tool => tool && typeof tool.name === 'string')
+            .map(tool => ({ name: tool.name, description: typeof tool.description === 'string' ? tool.description : '' }))
+        : []
+      setAllTools({ status: 'ready', list })
+      setToolsError('')
+      lastLoadedRef.current = Date.now()
+      setLastLoadedAt(lastLoadedRef.current)
+    } catch (error) {
+      if (seq !== loadSeq.current) return
+      const message = error instanceof Error ? error.message : '读取失败。'
+      setToolsError(message)
+      setAllTools(prev => prev.list.length > 0 ? { status: 'ready', list: prev.list } : { status: 'error', list: [] })
+    } finally {
+      if (seq === loadSeq.current) setRefreshing(false)
+    }
+  }
+
   useEffect(() => {
-    let gone = false
-    fetch(TOOLS_PATH, { headers: { accept: 'application/json' } })
-      .then(async (response) => {
-        if (!response.ok) throw new Error(`HTTP ${response.status}`)
-        return response.json()
-      })
-      .then((body) => {
-        if (gone) return
-        const list = Array.isArray(body.tools)
-          ? body.tools
-              .filter(tool => tool && typeof tool.name === 'string')
-              .map(tool => ({ name: tool.name, description: typeof tool.description === 'string' ? tool.description : '' }))
-          : []
-        setAllTools({ status: 'ready', list, message: '' })
-      })
-      .catch((error) => {
-        if (!gone) setAllTools({ status: 'error', list: [], message: error instanceof Error ? error.message : '读取失败。' })
-      })
-    return () => { gone = true }
+    void loadTools()
+    // 窗口重新聚焦 / 标签页重新可见时，若距上次拉取超过 30 秒就静默重取。
+    const refreshIfStale = () => {
+      if (Date.now() - lastLoadedRef.current > TOOLS_STALE_MS) void loadTools({ silent: true })
+    }
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') refreshIfStale()
+    }
+    document.addEventListener('visibilitychange', onVisibility)
+    window.addEventListener('focus', refreshIfStale)
+    // 宿主 `tools/change` 经 SSE 推送；收不到（浏览器不支持/连接失败）就靠上面的时机兜底。
+    let source
+    try {
+      source = new EventSource(TOOLS_EVENTS_PATH)
+      source.addEventListener('tools/change', () => { void loadTools({ silent: true }) })
+    } catch {
+      source = undefined
+    }
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibility)
+      window.removeEventListener('focus', refreshIfStale)
+      if (source) source.close()
+    }
   }, [])
 
   function updateDir(index, nextValue) {
@@ -696,7 +776,19 @@ function Editor({ value }) {
           h('span', { style: styles.label }, '额外保留的工具'),
           h('p', { style: styles.description }, '固定保留的 7 个工具已勾选并锁定；下面勾选其它工具即可加入 keepTools，取消即移除。'),
         ),
-        h('p', { style: styles.summary }, `共 ${allTools.list.length} 个工具，${groups.length} 个组，已额外保留 ${extraTools.length} 个。`),
+        h('div', { style: styles.toolsMeta },
+          h('p', { style: styles.summary }, `共 ${allTools.list.length} 个工具，${groups.length} 个组，已额外保留 ${extraTools.length} 个。`),
+          h('div', { style: styles.toolsMetaRight },
+            h('span', { style: styles.refreshTime }, lastLoadedAt ? `上次刷新 ${formatClock(lastLoadedAt)}` : ''),
+            h('button', {
+              type: 'button',
+              disabled: refreshing,
+              onClick: () => { void loadTools() },
+              style: refreshing ? { ...styles.refreshBtn, opacity: 0.6 } : styles.refreshBtn,
+            }, refreshing ? '刷新中…' : '刷新'),
+          ),
+        ),
+        h('p', { style: styles.emptyHint }, '列表随实际可用工具自动更新：进入页面、点「刷新」或窗口重新聚焦时会重新拉取。延迟加载的 MCP 工具要等对应服务首次连上后才会出现，没看到就稍后点「刷新」。'),
         h('div', { style: styles.searchWrap },
           h('span', { style: styles.searchIcon, 'aria-hidden': 'true' },
             h('svg', { width: 15, height: 15, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' },
@@ -735,8 +827,11 @@ function Editor({ value }) {
               ))
             : null,
         ),
+        toolsError
+          ? h('p', { style: { ...styles.emptyHint, color: 'var(--dsw-alias-state-error-primary)' } }, `刷新失败：${toolsError}${allTools.list.length > 0 ? '（下面显示的是上一次的结果）' : ''}`)
+          : null,
         allTools.status === 'error'
-          ? h('p', { style: { ...styles.emptyHint, color: 'var(--dsw-alias-state-error-primary)' } }, `读不到工具清单：${allTools.message}`)
+          ? h('p', { style: styles.emptyHint }, '工具清单暂时读不到。')
           : allTools.status === 'loading'
             ? h('p', { style: styles.emptyHint }, '工具清单加载中…')
             : shown.length === 0
