@@ -1,68 +1,58 @@
 # 派活 · dsh-delegate
 
-DeepSeek Harness（DSH）的一个插件：**命中工作目录的主会话只负责派活，不自己动手。**
+DeepSeek Harness（DSH）的一个插件：命中指定工作目录的**根会话**被收成「调度者」，只保留派活类工具，实际执行交给持久子会话。
 
-长时间埋头干活的主会话容易顾不上回用户。这个插件让指定目录下的根会话退成"调度者"——保留派活和定时任务的工具，把实际执行交给持久子会话。
+## 它做什么
 
-## 行为
+- 给该会话注入一段系统提示，要求它只派活、把执行交给子会话。
+- 只保留这些工具：`list_agents`、`send_message`、`subagent`、`schedule_create`、`schedule_edit`、`schedule_list`、`schedule_view`。其它工具对该会话不可用。
+- 只作用于根会话，且会话工作目录等于配置目录之一、或在其子目录下（`/data` 不命中 `/data-backup`）。
+- 子会话不受此限制，照常使用全部工具。
 
-- **目录命中**：只有会话的工作目录等于配置目录之一、或在其子目录下时才生效（`/data` 不会命中 `/data-backup`）。只作用于根会话，子会话不再套一层。
-- **收窄工具**：命中后，除下列工具外逐一挡掉：
-  `list_agents`、`send_message`、`subagent`、`schedule_create`、`schedule_edit`、`schedule_list`、`schedule_view`。
-- **强制起名**：新建子会话必须显式给 `name`，1–32 位小写字母/数字/连字符、以字母开头，不能叫 `lead`，也不能用 `agent-1` 这种默认名。
-- **闲置清理**：子会话超过 `idleDays` 天没被主会话发过消息，就从 `list_agents` 结果里隐去（没有活动记录的新会话不会被误伤）。
-- **自动化例外**：默认（`skipScheduled: true`）下，定时任务的投递目标会话不接管，照常使用全部工具，不会被收窄成只能派活。判定方式是每次接管时现读宿主 `schedule` 目录，收集所有「投递到固定会话」的任务的 `target.sessionId`，命中就跳过；任务增删后自动生效。若某个会话在接管之后才成为定时任务目标（例如定时消息投进来时它已经在跑、不会重新接管），则在下一步开始前检测到来自定时任务的消息（`source.kind === 'schedule'`）时撤掉限制。把它设为 `false` 就回到旧行为：定时任务会话和普通会话一样只能派活。
-- **设置页**：在「设置 → 派活」里配工作目录（一行一个，留空即全关）、闲置天数，以及「定时任务不接管」开关。
+## 安装
+
+```sh
+# 本地路径（本机当前用法）
+dsh plugin --profile <profile> add file:/abs/path/to/dsh-delegate
+# 从 GitHub 直装
+dsh plugin --profile <profile> add github:wliafe/dsh-delegate
+```
+
+本机用的是 `file:`（`/Users/wliafe/Desktop/project/dsh-delegate`）；改源码后 `node scripts/sync.mjs` 同步，宿主改动关/开插件，页面改动刷新浏览器。
 
 ## 配置
 
 | 字段 | 类型 | 默认 | 说明 |
 | --- | --- | --- | --- |
-| `directories` | `string[]` | `[]` | 命中的工作目录。空表示全关。 |
-| `idleDays` | `number` | `14` | 子会话闲置多少天后从列表隐去。最小 1。 |
-| `skipScheduled` | `boolean` | `true` | 定时任务投递到的会话不接管，照常使用全部工具；`false` 时与普通会话一样只能派活。 |
+| `directories` | `string[]` | `[]` | 命中的工作目录。空表示全部不生效。 |
+| `idleDays` | `number` | `14` | 子会话闲置多少天后从列表隐藏。最小 1。 |
+| `skipScheduled` | `boolean` | `true` | 定时任务投递到的会话不接管，照常使用全部工具。 |
 
-设置页通过宿主端路由 `GET/POST /delegate/config` 读写，写回走平台 `configEditor`，因此宿主策略读到的始终是同一份平台配置。
+- 配置存在 `<profile>/cordis.patch.yml` 里 `include:delegate` 条目的 `config` 下。
+- 设置界面在 **设置 → 派活**（设置弹窗左侧导航里的一节）。
+- 也可以直接 `POST /delegate/config`，JSON 就是上面三个字段。
 
-## 安装
+## 行为细节
 
-作为本地 bundle 装进某个 profile：
+- 新建子会话必须带明确名字：1–32 位小写字母/数字/连字符、以字母开头；不能叫 `lead`，也不能用 `agent-1` 这类默认名。
+- 子会话超过 `idleDays` 天没收到主会话消息，就从 `list_agents` 结果里隐藏。只是隐藏：会话文件仍在磁盘，名字仍被占用，列表里也难再找回。
+- 子智能体属于创建它的那个主会话树，不同主会话之间不能共用。
 
-```sh
-# 在目标 profile 的目录里，把包作为依赖安装并列入 bundles
-pnpm add dsh-delegate@file:/path/to/dsh-delegate --offline --ignore-scripts
-```
+## 子会话的局限
 
-并在该 profile 的 `package.json` 的 `dsh.profile.bundles` 里加上 `dsh-delegate`。`cordis.patch.yml` 会插入一个 `id: delegate` 入口，默认关闭（目录为空）。
+新建的子会话每次是全新上下文，不记得上一次做过什么。它适合「执行」，不适合需要连续记忆的工作。
 
-## 开发
+## 关闭与回滚
 
-浏览器半边（`client.js`）必须打成官方 `clientBundle` 的惰性 CJS 工厂格式，否则页面不会加载它。该预设未随发布包提供，`tsdown.config.ts` 复刻了一份：把平台共享模块外置，其余内联，并用 `window.__ModuleLoader__.load` 包裹。
+- 在插件管理里停用（或关闭）`include:delegate` 条目；或从 `<profile>/cordis.patch.yml` 删掉 `id: delegate` 那段。
+- 停用插件会卸载它，撤销已加的提示与工具屏蔽，已接管会话当场恢复全部工具。
+- 只手动改 `cordis.patch.yml` 删条目，要重载/重启宿主后才生效；重载前旧会话仍受限。
 
-```sh
-pnpm install
-./node_modules/.bin/tsdown        # 产出 lib/client.js
-```
+## 故障排查
 
-> 直接 `pnpm exec tsdown` 会因为 pnpm 去解析未发布的 `@deepseek-ai/dsh-type-meta` 而报 404，改用 `./node_modules/.bin/tsdown`。
+- 插件没生效：在插件管理里看 `include:delegate` 的 `fiberPhase` 是否 `active`；或访问 `GET /delegate/config`，应返回 JSON。
+- 工具突然不可用：多半是当前会话被接管了，去「设置 → 派活」确认 `directories` 是否命中它的工作目录。
 
-本地调试时，改完代码用一条命令构建并同步进已安装副本（默认 `~/.dsh/profiles/desktop/node_modules/dsh-delegate`，可用 `--dest` 或 `DSH_DELEGATE_INSTALL` 覆盖）：
+## 许可证与仓库
 
-```sh
-npm run deploy:local      # = build + sync
-```
-
-宿主逻辑（`index.js`）的改动要把插件关一下再开；页面部分（`lib/client.js`）的改动刷新浏览器页面即可。
-
-
-## 结构
-
-- `index.js` — 宿主侧插件：工具收窄、起名守卫、闲置隐藏、配置路由。
-- `policy.js` — 纯函数：目录命中、名字校验、过期判断，便于单独测试。
-- `client.js` → `lib/client.js` — 设置侧边栏一节（构建产物）。
-- `cordis.patch.yml` — bundle 插入的默认入口。
-- `locale/` — 中英文显示名与描述。
-
-## License
-
-MIT
+MIT。仓库：https://github.com/wliafe/dsh-delegate
