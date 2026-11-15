@@ -8,11 +8,12 @@ import { z as zod } from 'zod'
 import { directoryMatches, expiredNames, KEPT_TOOLS, rejectName } from './policy.js'
 
 export const name = 'delegate'
-export const inject = ['agents', 'tools', 'systemPrompt', 'storageDomain', 'webServer', 'configEditor']
+export const inject = ['agents', 'tools', 'systemPrompt', 'storageDomain', 'webServer', 'configEditor', 'schedule']
 
 export const Config = z.object({
   directories: z.array(String).default([]).description('命中的工作目录。空着表示全关。会话目录等于其中一项或在它下面才生效。'),
   idleDays: z.number().min(1).default(14).description('子会话超过这么多天没被主会话发过消息，就从列表里拿掉。'),
+  skipScheduled: z.boolean().default(true).description('定时任务投递到的会话不接管，照常使用全部工具；关闭后与普通会话一样只能派活。'),
 })
 
 /** 活动记录：名字到最后一次被主会话发消息的毫秒时间。 */
@@ -38,7 +39,7 @@ const SECTION_ORDER = 10300
 
 /**
  * @param {import('@deepseek-ai/cordis').Context} ctx 插件上下文。
- * @param {{ directories: string[], idleDays: number }} config 当前配置。
+ * @param {{ directories: string[], idleDays: number, skipScheduled: boolean }} config 当前配置。
  */
 export async function apply(ctx, config) {
   ctx.effect(() => ctx.webServer.register({
@@ -52,45 +53,73 @@ export async function apply(ctx, config) {
   const table = domain.table('activity')
   const disposers = new Map()
 
-  const attach = agent => {
-    if (disposers.has(agent.id)) return
+  // 正在接管中的会话 id，防止并发 attach（如 created 与加载时列举同时触发）。
+  const attaching = new Set()
+
+  const attach = async agent => {
+    if (disposers.has(agent.id) || attaching.has(agent.id)) return
     if (!appliesTo(agent, config.directories)) return
-    const agentCtx = agent.ctx
+    attaching.add(agent.id)
     try {
-      const dispose = agentCtx.effect(() => {
-        // 先做可能失败的事（注册 section、guard），最后才 maskExcept 动工具；
-        // 中途任一步抛错，就把已经注册的 section/guard/lifts 全部撤销，
-        // 避免工具被 restrict 后无法恢复，把 agent 永久锁死。
-        const stopSection = agentCtx.systemPrompt.section({ name: 'delegate', text: RULE, order: SECTION_ORDER })
-        let stopGuard
-        let lifts = []
-        try {
-          stopGuard = agentCtx.tools.guard(exec => guardSpawn(exec))
-          lifts = maskExcept(agentCtx, agent)
-        } catch (error) {
-          for (const lift of lifts) lift()
-          stopGuard?.()
-          stopSection()
-          throw error
-        }
-        return () => {
-          for (const lift of lifts) lift()
-          stopGuard?.()
-          stopSection()
-        }
-      }, 'delegate: attach')
-      disposers.set(agent.id, dispose)
-    } catch (error) {
-      // 接管失败就当没接管：不留下半套状态，也不影响其它会话。
-      disposers.delete(agent.id)
-      ctx.logger.warn(`delegate: 接管会话 ${agent.id} 失败：${error instanceof Error ? error.message : String(error)}`)
+      // 定时任务的投递目标会话不接管：让它照常使用全部工具。
+      // 每次 attach 都现算目标集合（读宿主的 schedule 目录），新增/删除任务后立即生效，不缓存。
+      if (config.skipScheduled && await isScheduledTarget(ctx, agent)) return
+      if (disposers.has(agent.id)) return
+      const agentCtx = agent.ctx
+      try {
+        const dispose = agentCtx.effect(() => {
+          // 先做可能失败的事（注册 section、guard），最后才 maskExcept 动工具；
+          // 中途任一步抛错，就把已经注册的 section/guard/lifts 全部撤销，
+          // 避免工具被 restrict 后无法恢复，把 agent 永久锁死。
+          const stopSection = agentCtx.systemPrompt.section({ name: 'delegate', text: RULE, order: SECTION_ORDER })
+          let stopGuard
+          let lifts = []
+          try {
+            stopGuard = agentCtx.tools.guard(exec => guardSpawn(exec))
+            lifts = maskExcept(agentCtx, agent)
+          } catch (error) {
+            for (const lift of lifts) lift()
+            stopGuard?.()
+            stopSection()
+            throw error
+          }
+          return () => {
+            for (const lift of lifts) lift()
+            stopGuard?.()
+            stopSection()
+          }
+        }, 'delegate: attach')
+        disposers.set(agent.id, dispose)
+      } catch (error) {
+        // 接管失败就当没接管：不留下半套状态，也不影响其它会话。
+        disposers.delete(agent.id)
+        ctx.logger.warn(`delegate: 接管会话 ${agent.id} 失败：${error instanceof Error ? error.message : String(error)}`)
+      }
+    } finally {
+      attaching.delete(agent.id)
     }
   }
 
   // 插件加载时已经在跑的会话也一并接管，不必等它们重开。
-  for (const agent of ctx.agents.list()) attach(agent)
+  for (const agent of ctx.agents.list()) void attach(agent)
 
-  ctx.on('agent/created', ({ agent }) => attach(agent))
+  ctx.on('agent/created', ({ agent }) => { void attach(agent) })
+
+  // 兜底：某个会话在 attach 之后才成为定时任务投递目标（典型是定时消息投进来时
+  // agent 已经在跑，不会再触发 agent/created，也就不会重新 attach）。在下一步开始前
+  // 若发现这一步的用户消息来自定时任务，就把已经套上的限制撤掉，让它照常使用全部工具。
+  ctx.on('agent/pre-step', async ({ agent, messages }, next) => {
+    if (
+      config.skipScheduled
+      && disposers.has(agent.id)
+      && Array.isArray(messages)
+      && messages.some(message => message !== null && typeof message === 'object' && message.source?.kind === 'schedule')
+    ) {
+      disposers.get(agent.id)?.()
+      disposers.delete(agent.id)
+    }
+    return next()
+  })
 
   ctx.on('agent/disposed', ({ agent }) => {
     disposers.get(agent.id)?.()
@@ -144,7 +173,7 @@ async function handleConfig(ctx, req, res) {
   }
   if (req.method === 'GET') {
     const value = ctx.fiber.effectiveConfig
-    sendJson(res, 200, value && typeof value === 'object' ? value : { directories: [], idleDays: 14 })
+    sendJson(res, 200, value && typeof value === 'object' ? value : { directories: [], idleDays: 14, skipScheduled: true })
     return
   }
   if (req.method !== 'POST') {
@@ -175,7 +204,7 @@ async function handleConfig(ctx, req, res) {
     return
   }
   try {
-    await ctx.configEditor.edit(entry, () => ({ directories: next.directories, idleDays: next.idleDays }))
+    await ctx.configEditor.edit(entry, () => ({ directories: next.directories, idleDays: next.idleDays, skipScheduled: next.skipScheduled }))
   } catch (error) {
     sendJson(res, 409, { error: error instanceof Error ? error.message : '没保存成。' })
     return
@@ -252,6 +281,56 @@ function appliesTo(agent, directories) {
   )
   if (depth > 0) return false
   return directoryMatches(agent?.session?.header?.cwd, directories)
+}
+
+/**
+ * 会话 id 归一化：宿主的 SessionId 有时带 `session-` 前缀、有时不带，
+ * 去掉前缀后比较，避免因为前缀差异漏判。
+ * @param {unknown} value 会话 id。
+ * @returns {string}
+ */
+function normId(value) {
+  return String(value ?? '').replace(/^session-/, '')
+}
+
+/**
+ * 现读宿主定时任务目录，收集所有「投递到固定会话」的任务目标会话 id 集合。
+ * 只看未结束（status !== 'ended'）的任务；`kind:'new'` 没有固定 sessionId，跳过。
+ * 每次调用都重新读取，不缓存，任务增删后立即反映。
+ * @param {import('@deepseek-ai/cordis').Context} ctx 插件上下文。
+ * @returns {Promise<Set<string>>} 归一化后的会话 id 集合。
+ */
+async function scheduledTargetIds(ctx) {
+  const ids = new Set()
+  try {
+    const entries = await ctx.schedule.catalog()
+    for (const entry of entries) {
+      if (entry === null || typeof entry !== 'object' || entry.status === 'ended') continue
+      const target = entry.target
+      if (target === null || typeof target !== 'object') continue
+      if (target.kind !== 'session' && target.kind !== 'new_once') continue
+      if (typeof target.sessionId === 'string' && target.sessionId.length > 0) {
+        ids.add(normId(target.sessionId))
+      }
+    }
+  } catch (error) {
+    // 读不到任务列表时按普通会话处理（宁可接管，也不因为判定失败而漏管）。
+    ctx.logger?.warn?.(`delegate: 读取定时任务列表失败，按普通会话处理：${error instanceof Error ? error.message : String(error)}`)
+  }
+  return ids
+}
+
+/**
+ * 判断该会话是否是某个定时任务的投递目标。
+ * @param {import('@deepseek-ai/cordis').Context} ctx 插件上下文。
+ * @param {any} agent 会话对象。
+ * @returns {Promise<boolean>}
+ */
+async function isScheduledTarget(ctx, agent) {
+  const ids = await scheduledTargetIds(ctx)
+  if (ids.size === 0) return false
+  if (ids.has(normId(agent?.id))) return true
+  return ids.has(normId(agent?.session?.header?.id))
 }
 
 /** @param {{ name: string, arguments: unknown }} exec */

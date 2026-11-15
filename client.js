@@ -121,6 +121,26 @@ const styles = {
     fontSize: 13,
     color: 'var(--dsw-alias-label-secondary)',
   },
+  switchTrack: {
+    position: 'relative',
+    width: 40,
+    height: 22,
+    borderRadius: 11,
+    border: 'none',
+    padding: 0,
+    flexShrink: 0,
+    transition: 'background .15s',
+  },
+  switchKnob: {
+    position: 'absolute',
+    top: 2,
+    width: 18,
+    height: 18,
+    borderRadius: '50%',
+    background: '#fff',
+    boxShadow: '0 1px 2px rgba(0, 0, 0, 0.25)',
+    transition: 'left .15s',
+  },
   emptyHint: {
     margin: 0,
     padding: '10px 12px',
@@ -227,12 +247,14 @@ function DelegateSection() {
   return h(Editor, { value: state.value })
 }
 
-/** @param {{ value: { directories?: unknown, idleDays?: unknown } }} props */
+/** @param {{ value: { directories?: unknown, idleDays?: unknown, skipScheduled?: unknown } }} props */
 function Editor({ value }) {
   const saved = Array.isArray(value.directories) ? value.directories.filter(item => typeof item === 'string') : []
   const savedDays = typeof value.idleDays === 'number' ? value.idleDays : 14
+  const savedSkip = typeof value.skipScheduled === 'boolean' ? value.skipScheduled : true
   const [dirs, setDirs] = useState(saved)
   const [days, setDays] = useState(String(savedDays))
+  const [skip, setSkip] = useState(savedSkip)
   const [note, setNote] = useState({ text: '', ok: false })
   const [busy, setBusy] = useState(false)
 
@@ -263,7 +285,7 @@ function Editor({ value }) {
       const response = await fetch(PATH, {
         method: 'POST',
         headers: { 'content-type': 'application/json', accept: 'application/json' },
-        body: JSON.stringify({ directories, idleDays }),
+        body: JSON.stringify({ directories, idleDays, skipScheduled: skip }),
       })
       const body = await response.json().catch(() => ({}))
       if (response.ok) {
@@ -338,6 +360,31 @@ function Editor({ value }) {
             style: styles.daysInput,
           }),
           h('span', { style: styles.unit }, '天'),
+        ),
+      ),
+      h('div', { style: styles.rowSplit },
+        h('div', { style: styles.rowText },
+          h('span', { style: styles.label }, '定时任务不接管'),
+          h('p', { style: styles.description }, '开启后，定时任务投递到的会话照常使用全部工具；关闭则与普通会话一样只能派活。'),
+        ),
+        h('button', {
+          type: 'button',
+          role: 'switch',
+          'aria-checked': skip,
+          'aria-label': '定时任务不接管',
+          disabled: busy,
+          onClick: () => {
+            setSkip(prev => !prev)
+            if (note.text) setNote({ text: '', ok: false })
+          },
+          style: {
+            ...styles.switchTrack,
+            cursor: busy ? 'not-allowed' : 'pointer',
+            opacity: busy ? 0.5 : 1,
+            background: skip ? 'var(--dsw-alias-state-business-primary)' : 'var(--dsw-alias-border-l3)',
+          },
+        },
+          h('span', { style: { ...styles.switchKnob, left: skip ? 20 : 2 } }),
         ),
       ),
     ),
