@@ -569,7 +569,21 @@ function Editor({ value }) {
       members: members.sort((a, b) => a.short.localeCompare(b.short) || a.name.localeCompare(b.name)),
     }))
     .sort((a, b) => b.members.length - a.members.length || a.title.localeCompare(b.title))
-  const groups = [fixedGroup, ...prefixGroups]
+  const keptGroups = []
+  const mergedMembers = []
+  for (const group of prefixGroups) {
+    const hasCheckedTool = group.members.some(member => extraSet.has(member.name))
+    if (group.members.length === 1 && !hasCheckedTool) {
+      mergedMembers.push({ ...group.members[0], display: group.members[0].name })
+    } else {
+      keptGroups.push(group)
+    }
+  }
+  const groups = [fixedGroup, ...keptGroups]
+  if (mergedMembers.length > 0) {
+    mergedMembers.sort((a, b) => a.name.localeCompare(b.name))
+    groups.push({ key: '__other__', title: '其他', fixed: false, members: mergedMembers })
+  }
 
   const query = search.trim().toLowerCase()
   const shown = groups
