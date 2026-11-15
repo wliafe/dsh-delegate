@@ -53,6 +53,13 @@ const styles = {
     justifyContent: 'space-between',
     gap: 16,
   },
+  rowTop: {
+    padding: '16px 0',
+    borderTop: '0.5px solid var(--dsw-alias-border-l2)',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 12,
+  },
   rowText: {
     display: 'flex',
     flexDirection: 'column',
@@ -95,6 +102,25 @@ const styles = {
     outline: 'none',
     fontFamily: 'inherit',
     boxSizing: 'border-box',
+  },
+  toolChip: {
+    flex: 1,
+    minWidth: 0,
+    height: 34,
+    display: 'flex',
+    alignItems: 'center',
+    padding: '0 10px',
+    fontSize: 13,
+    lineHeight: '20px',
+    fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
+    color: 'var(--dsw-alias-label-primary)',
+    background: 'var(--dsw-alias-bg-layer-1)',
+    border: '0.5px solid var(--dsw-alias-border-l2)',
+    borderRadius: 'var(--dsw-radius-md, 8px)',
+    boxSizing: 'border-box',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
   },
   daysWrap: {
     display: 'flex',
@@ -247,14 +273,17 @@ function DelegateSection() {
   return h(Editor, { value: state.value })
 }
 
-/** @param {{ value: { directories?: unknown, idleDays?: unknown, skipScheduled?: unknown } }} props */
+/** @param {{ value: { directories?: unknown, idleDays?: unknown, skipScheduled?: unknown, keepTools?: unknown } }} props */
 function Editor({ value }) {
   const saved = Array.isArray(value.directories) ? value.directories.filter(item => typeof item === 'string') : []
   const savedDays = typeof value.idleDays === 'number' ? value.idleDays : 14
   const savedSkip = typeof value.skipScheduled === 'boolean' ? value.skipScheduled : true
+  const savedKeep = Array.isArray(value.keepTools) ? value.keepTools.filter(item => typeof item === 'string') : []
   const [dirs, setDirs] = useState(saved)
   const [days, setDays] = useState(String(savedDays))
   const [skip, setSkip] = useState(savedSkip)
+  const [extraTools, setExtraTools] = useState(savedKeep)
+  const [toolDraft, setToolDraft] = useState('')
   const [note, setNote] = useState({ text: '', ok: false })
   const [busy, setBusy] = useState(false)
 
@@ -273,8 +302,22 @@ function Editor({ value }) {
     if (note.text) setNote({ text: '', ok: false })
   }
 
+  function addTool() {
+    const name = toolDraft.trim()
+    if (name.length === 0) return
+    setExtraTools(prev => (prev.includes(name) ? prev : [...prev, name]))
+    setToolDraft('')
+    if (note.text) setNote({ text: '', ok: false })
+  }
+
+  function removeTool(index) {
+    setExtraTools(prev => prev.filter((_, i) => i !== index))
+    if (note.text) setNote({ text: '', ok: false })
+  }
+
   async function save() {
     const directories = dirs.map(line => line.trim()).filter(line => line.length > 0)
+    const keepTools = extraTools.map(name => name.trim()).filter(name => name.length > 0)
     const idleDays = Number(days)
     if (!Number.isInteger(idleDays) || idleDays < 1) {
       setNote({ text: '闲置天数要是大于等于 1 的整数。', ok: false })
@@ -285,11 +328,12 @@ function Editor({ value }) {
       const response = await fetch(PATH, {
         method: 'POST',
         headers: { 'content-type': 'application/json', accept: 'application/json' },
-        body: JSON.stringify({ directories, idleDays, skipScheduled: skip }),
+        body: JSON.stringify({ directories, idleDays, skipScheduled: skip, keepTools }),
       })
       const body = await response.json().catch(() => ({}))
       if (response.ok) {
         setDirs(directories)
+        setExtraTools(keepTools)
         setNote({ text: '已保存。', ok: true })
       } else {
         setNote({ text: typeof body.error === 'string' ? body.error : '没保存成，刷新后再试。', ok: false })
@@ -385,6 +429,52 @@ function Editor({ value }) {
           },
         },
           h('span', { style: { ...styles.switchKnob, left: skip ? 20 : 2 } }),
+        ),
+      ),
+      h('div', { style: styles.rowTop },
+        h('div', { style: styles.rowText },
+          h('span', { style: styles.label }, '额外保留的工具'),
+          h('p', { style: styles.description }, '固定保留 list_agents、send_message、subagent 和 schedule_create / edit / list / view；这里追加的工具也会对命中会话放行，例如 IM 的发文件、群历史、群文件。'),
+        ),
+        extraTools.length === 0
+          ? h('p', { style: styles.emptyHint }, '尚未追加。固定保留：list_agents、send_message、subagent、schedule_* 四项。')
+          : h('div', { style: styles.dirList },
+              ...extraTools.map((name, index) =>
+                h('div', { key: `${name}:${index}`, style: styles.dirRow },
+                  h('span', { style: styles.toolChip, title: name }, name),
+                  h('button', {
+                    type: 'button',
+                    disabled: busy,
+                    onClick: () => removeTool(index),
+                    style: { ...styles.ghostBtn, opacity: busy ? 0.5 : 1 },
+                  }, '移除'),
+                ),
+              ),
+            ),
+        h('div', { style: styles.dirRow },
+          h('input', {
+            type: 'text',
+            value: toolDraft,
+            placeholder: '工具名，例如 dsh_im_return_file',
+            disabled: busy,
+            onChange: event => {
+              setToolDraft(event.target.value)
+              if (note.text) setNote({ text: '', ok: false })
+            },
+            onKeyDown: event => {
+              if (event.key === 'Enter') {
+                event.preventDefault()
+                addTool()
+              }
+            },
+            style: styles.input,
+          }),
+          h('button', {
+            type: 'button',
+            disabled: busy || toolDraft.trim().length === 0,
+            onClick: addTool,
+            style: { ...styles.addBtn, alignSelf: 'auto', opacity: busy || toolDraft.trim().length === 0 ? 0.5 : 1 },
+          }, '添加'),
         ),
       ),
     ),

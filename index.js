@@ -5,7 +5,7 @@
 
 import z from '@deepseek-ai/schemastery'
 import { z as zod } from 'zod'
-import { directoryMatches, expiredNames, KEPT_TOOLS, rejectName } from './policy.js'
+import { directoryMatches, effectiveKeptTools, expiredNames, rejectName } from './policy.js'
 
 export const name = 'delegate'
 export const inject = ['agents', 'tools', 'systemPrompt', 'storageDomain', 'webServer', 'configEditor', 'schedule']
@@ -14,6 +14,7 @@ export const Config = z.object({
   directories: z.array(String).default([]).description('命中的工作目录。空着表示全关。会话目录等于其中一项或在它下面才生效。'),
   idleDays: z.number().min(1).default(14).description('子会话超过这么多天没被主会话发过消息，就从列表里拿掉。'),
   skipScheduled: z.boolean().default(true).description('定时任务投递到的会话不接管，照常使用全部工具；关闭后与普通会话一样只能派活。'),
+  keepTools: z.array(String).default([]).description('在固定保留的 7 个工具之外，额外要放行的工具名。'),
 })
 
 /** 活动记录：名字到最后一次被主会话发消息的毫秒时间。 */
@@ -53,6 +54,9 @@ export async function apply(ctx, config) {
   const table = domain.table('activity')
   const disposers = new Map()
 
+  // 有效保留集合 = 固定 7 个 ∪ 配置里追加的 keepTools（去重、去空），attach 时据此放行。
+  const keptTools = effectiveKeptTools(config.keepTools)
+
   // 正在接管中的会话 id，防止并发 attach（如 created 与加载时列举同时触发）。
   const attaching = new Set()
 
@@ -76,7 +80,7 @@ export async function apply(ctx, config) {
           let lifts = []
           try {
             stopGuard = agentCtx.tools.guard(exec => guardSpawn(exec))
-            lifts = maskExcept(agentCtx, agent)
+            lifts = maskExcept(agentCtx, agent, keptTools)
           } catch (error) {
             for (const lift of lifts) lift()
             stopGuard?.()
@@ -173,7 +177,7 @@ async function handleConfig(ctx, req, res) {
   }
   if (req.method === 'GET') {
     const value = ctx.fiber.effectiveConfig
-    sendJson(res, 200, value && typeof value === 'object' ? value : { directories: [], idleDays: 14, skipScheduled: true })
+    sendJson(res, 200, value && typeof value === 'object' ? value : { directories: [], idleDays: 14, skipScheduled: true, keepTools: [] })
     return
   }
   if (req.method !== 'POST') {
@@ -203,13 +207,19 @@ async function handleConfig(ctx, req, res) {
     sendJson(res, 400, { error: error instanceof Error ? error.message.split('\n')[0] : '配置不合法。' })
     return
   }
+  // 规整 keepTools：只留非空字符串，去首尾空白、去重（保留首次出现顺序）。
+  const keepTools = (Array.isArray(next.keepTools) ? next.keepTools : [])
+    .filter(name => typeof name === 'string' && name.trim().length > 0)
+    .map(name => name.trim())
+    .filter((name, index, all) => all.indexOf(name) === index)
+  const saved = { directories: next.directories, idleDays: next.idleDays, skipScheduled: next.skipScheduled, keepTools }
   try {
-    await ctx.configEditor.edit(entry, () => ({ directories: next.directories, idleDays: next.idleDays, skipScheduled: next.skipScheduled }))
+    await ctx.configEditor.edit(entry, () => saved)
   } catch (error) {
     sendJson(res, 409, { error: error instanceof Error ? error.message : '没保存成。' })
     return
   }
-  sendJson(res, 200, next)
+  sendJson(res, 200, saved)
 }
 
 /**
@@ -256,10 +266,10 @@ function sendJson(res, status, value) {
  * @param {any} agent 会话对象。
  * @returns {撤销函数}
  */
-function maskExcept(agentCtx, agent) {
+function maskExcept(agentCtx, agent, kept) {
   const lifts = []
   for (const definition of agentCtx.tools.definitions(agent)) {
-    if (KEPT_TOOLS.includes(definition.name)) continue
+    if (kept.has(definition.name)) continue
     try {
       lifts.push(agentCtx.tools.restrict({ deny: [definition.name] }))
     } catch {

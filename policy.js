@@ -1,7 +1,7 @@
 /** 命中判断与名字规则。不依赖主机，便于单独验证。 */
 
-/** 主会话保留的工具：派活 3 个、定时 4 个、IM 3 个。 */
-export const KEPT_TOOLS = [
+/** 固定保留的工具：无论配置如何，主会话总是保留这 7 个（派活 3 + 定时 4）。 */
+export const BASE_KEPT_TOOLS = [
   'list_agents',
   'send_message',
   'subagent',
@@ -9,10 +9,24 @@ export const KEPT_TOOLS = [
   'schedule_edit',
   'schedule_list',
   'schedule_view',
-  'dsh_im_return_file',
-  'dsh_im_group_history',
-  'dsh_im_group_file',
 ]
+
+/**
+ * 有效保留集合 = 固定 7 个 ∪ 配置里额外追加的 keepTools（去重、去空、去空白）。
+ * @param {readonly string[] | undefined} keepTools 配置里的额外工具名。
+ * @returns {Set<string>}
+ */
+export function effectiveKeptTools(keepTools) {
+  const kept = new Set(BASE_KEPT_TOOLS)
+  if (Array.isArray(keepTools)) {
+    for (const name of keepTools) {
+      if (typeof name !== 'string') continue
+      const trimmed = name.trim()
+      if (trimmed.length > 0) kept.add(trimmed)
+    }
+  }
+  return kept
+}
 
 const NAME_RE = /^[a-z][a-z0-9-]{0,31}$/
 

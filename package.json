@@ -1,6 +1,6 @@
 {
   "name": "dsh-delegate",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "private": true,
   "type": "module",
   "description": "命中工作目录的主会话只能把任务派给持久子会话。",

@@ -5,7 +5,7 @@ DeepSeek Harness（DSH）的一个插件：命中指定工作目录的**根会�
 ## 它做什么
 
 - 给该会话注入一段系统提示，要求它只派活、把执行交给子会话。
-- 只保留这些工具：派活 `list_agents`、`send_message`、`subagent`；定时 `schedule_create`、`schedule_edit`、`schedule_list`、`schedule_view`；IM `dsh_im_return_file`、`dsh_im_group_history`、`dsh_im_group_file`。其它工具对该会话不可用。
+- 固定保留 7 个工具：派活 `list_agents`、`send_message`、`subagent`，定时 `schedule_create`、`schedule_edit`、`schedule_list`、`schedule_view`。其它工具默认对该会话不可用，需要放行的通过配置项 `keepTools` 追加。
 - 只作用于根会话，且会话工作目录等于配置目录之一、或在其子目录下（`/data` 不命中 `/data-backup`）。
 - 子会话不受此限制，照常使用全部工具。
 
@@ -24,10 +24,11 @@ dsh plugin --profile <profile> add github:wliafe/dsh-delegate
 | `directories` | `string[]` | `[]` | 命中的工作目录。空表示全部不生效。 |
 | `idleDays` | `number` | `14` | 子会话闲置多少天后从列表隐藏。最小 1。 |
 | `skipScheduled` | `boolean` | `true` | 定时任务投递到的会话不接管，照常使用全部工具。 |
+| `keepTools` | `string[]` | `[]` | 在固定 7 个之外，额外要放行的工具名（如 IM 的 `dsh_im_return_file`）。 |
 
 - 配置存在 `<profile>/cordis.patch.yml` 里 `include:delegate` 条目的 `config` 下。
-- 设置界面在 **设置 → 派活**（设置弹窗左侧导航里的一节）。
-- 也可以直接 `POST /delegate/config`，JSON 就是上面三个字段。
+- 设置界面在 **设置 → 派活**（设置弹窗左侧导航里的一节）；「额外保留的工具」一节对应 `keepTools`。
+- 也可以直接 `POST /delegate/config`，JSON 就是上面四个字段。
 
 ## 行为细节
 
